@@ -54,6 +54,8 @@ export interface TimelineProps {
     onZoom?: (pps: number, fit: boolean) => void;
     onMarkerClick?: (marker: Marker) => void;
     onClipAction?: (action: ClipActionName, ctx: ClipActionContext) => void;
+    /** 双击片段(如「循环这一镜」) */
+    onClipDoubleClick?: (clip: Clip, track: Track) => void;
     /** 键 → 片段动作(只在给了 onClipAction 时生效;输入框里与带修饰键时不响应),如 `{ c: "split", m: "merge-prev" }` */
     keymap?: Partial<Record<string, ClipActionName>>;
     /** 片段悬停提示的内容(不给就用 clip.title 原生提示) */

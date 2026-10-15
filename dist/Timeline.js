@@ -271,8 +271,9 @@ export function Timeline(props) {
         return () => window.removeEventListener("keydown", h);
     }, []);
     /* ── 可视区间 ── */
-    const t0 = (x - viewW * 0.5) / pps;
-    const t1 = (x + viewW * 1.5) / pps;
+    // 还没量到宽度(服务端渲染 / 首帧)时全画,免得静态首屏只剩第一段
+    const t0 = viewW ? (x - viewW * 0.5) / pps : 0;
+    const t1 = viewW ? (x + viewW * 1.5) / pps : total;
     const onVis = props.onVisibleRangeChange;
     useEffect(() => {
         if (!onVis || !viewW)
@@ -299,7 +300,15 @@ export function Timeline(props) {
             tipTimer.current = window.setTimeout(() => setTip({ x: cx, y: cy, node: props.renderTooltip(clip, track) }), 220);
         }
         : undefined;
-    return (_jsxs("section", { "aria-label": L10N.timeline, className: cx("xtl", props.className), "data-theme": props.theme ?? "dark", ...props.attrs, children: [_jsxs("header", { className: "xtl-toolbar", children: [_jsx("div", { className: "xtl-toolbar-start", children: props.toolbarStart }), _jsxs("div", { className: "xtl-toolbar-end", children: [props.toolbarEnd, _jsx(ZoomControl, { pps: pps, minPps: minPps, maxPps: maxPps, viewW: viewW, onZoom: (p) => setZoom(p), onFit: fitAll, fitOn: fitMode, L: L10N })] })] }), _jsxs("div", { className: "xtl-body", children: [_jsxs("div", { className: "xtl-heads", style: { width: headW }, children: [_jsx("div", { className: "xtl-corner", style: { height: RULER_H + MARK_H }, children: props.corner ?? _jsx("span", { className: "xtl-mono xtl-faint", children: timecode(playhead, fps) }) }), tracks.map((t) => (_jsx(TrackHead, { track: t, narrow: narrow, L: L10N, onToggle: props.onToggleTrack ? () => props.onToggleTrack(t.id) : undefined }, t.id))), _jsx("div", { style: { height: SCROLLBAR_H } })] }), _jsxs("div", { ref: viewport, "data-xtl-viewport": "", className: cx("xtl-viewport", scrubbing && "xtl-scrubbing"), onPointerDown: onPointerDown, onPointerMove: onPointerMove, onPointerUp: onPointerEnd, onPointerCancel: onPointerEnd, children: [_jsxs("div", { className: "xtl-content", style: { width: Math.max(contentW, viewW), transform: `translate3d(${-x}px,0,0)` }, children: [_jsx(Ruler, { t0: Math.max(0, x / pps), t1: (x + viewW) / pps, pps: pps, fps: fps, total: total }), _jsx(MarkerRow, { markers: props.markers ?? [], pps: pps, t0: t0, t1: t1, viewX: x, onMarkerClick: props.onMarkerClick, L: L10N }), _jsx("div", { role: "slider", tabIndex: -1, "aria-label": L10N.timeline, "aria-valuemin": 0, "aria-valuemax": Math.round(total * 100) / 100, "aria-valuenow": Math.round(playhead * 100) / 100, "aria-valuetext": timecode(playhead, fps), "data-xtl-lanes": "", className: "xtl-lanes", style: { height: lanesH }, children: _jsx(Lanes, { tracks: tracks, pps: pps, t0: t0, t1: t1, viewX: x, viewW: viewW, playhead: playhead, selection: selection, onHover: onClipHover }) }), _jsx("div", { "data-xtl-playhead": "", className: "xtl-playhead", style: { transform: `translate3d(${playhead * pps}px,0,0)` }, children: _jsx("span", { className: "xtl-playhead-tc xtl-mono", style: edge ? { transform: edge === "left" ? "translateX(-2px)" : "translateX(calc(-100% + 2px))" } : undefined, children: timecode(playhead, fps) }) })] }), !total && _jsx("p", { className: "xtl-empty", children: L10N.empty })] })] }), _jsx(Scrollbar, { x: x, viewW: viewW, contentW: contentW, headW: headW, tracks: tracks, total: total, onScroll: setScroll }), tip && (_jsx("div", { className: "xtl-tip", style: { left: tip.x, top: tip.y }, role: "tooltip", children: tip.node }))] }));
+    return (_jsxs("section", { "aria-label": L10N.timeline, className: cx("xtl", props.className), "data-theme": props.theme ?? "dark", ...props.attrs, children: [_jsxs("header", { className: "xtl-toolbar", children: [_jsx("div", { className: "xtl-toolbar-start", children: props.toolbarStart }), _jsxs("div", { className: "xtl-toolbar-end", children: [props.toolbarEnd, _jsx(ZoomControl, { pps: pps, minPps: minPps, maxPps: maxPps, viewW: viewW, onZoom: (p) => setZoom(p), onFit: fitAll, fitOn: fitMode, L: L10N })] })] }), _jsxs("div", { className: "xtl-body", children: [_jsxs("div", { className: "xtl-heads", style: { width: headW }, children: [_jsx("div", { className: "xtl-corner", style: { height: RULER_H + MARK_H }, children: props.corner ?? _jsx("span", { className: "xtl-mono xtl-faint", children: timecode(playhead, fps) }) }), tracks.map((t) => (_jsx(TrackHead, { track: t, narrow: narrow, L: L10N, onToggle: props.onToggleTrack ? () => props.onToggleTrack(t.id) : undefined }, t.id))), _jsx("div", { style: { height: SCROLLBAR_H } })] }), _jsxs("div", { ref: viewport, "data-xtl-viewport": "", className: cx("xtl-viewport", scrubbing && "xtl-scrubbing"), onPointerDown: onPointerDown, onPointerMove: onPointerMove, onPointerUp: onPointerEnd, onPointerCancel: onPointerEnd, onDoubleClick: props.onClipDoubleClick
+                            ? (e) => {
+                                const el = e.target.closest("[data-xtl-clip]");
+                                const tr = el && tracks.find((t) => t.id === el.dataset.xtlTrack);
+                                const c = tr && tr.clips.find((k) => k.id === el.dataset.xtlClip);
+                                if (tr && c && !c.disabled)
+                                    props.onClipDoubleClick(c, tr);
+                            }
+                            : undefined, children: [_jsxs("div", { className: "xtl-content", style: { width: Math.max(contentW, viewW), transform: `translate3d(${-x}px,0,0)` }, children: [_jsx(Ruler, { t0: Math.max(0, x / pps), t1: (x + viewW) / pps, pps: pps, fps: fps, total: total }), _jsx(MarkerRow, { markers: props.markers ?? [], pps: pps, t0: t0, t1: t1, viewX: x, onMarkerClick: props.onMarkerClick, L: L10N }), _jsx("div", { role: "slider", tabIndex: -1, "aria-label": L10N.timeline, "aria-valuemin": 0, "aria-valuemax": Math.round(total * 100) / 100, "aria-valuenow": Math.round(playhead * 100) / 100, "aria-valuetext": timecode(playhead, fps), "data-xtl-lanes": "", className: "xtl-lanes", style: { height: lanesH }, children: _jsx(Lanes, { tracks: tracks, pps: pps, t0: t0, t1: t1, viewX: x, viewW: viewW, playhead: playhead, selection: selection, onHover: onClipHover }) }), _jsx("div", { "data-xtl-playhead": "", className: "xtl-playhead", style: { transform: `translate3d(${playhead * pps}px,0,0)` }, children: _jsx("span", { className: "xtl-playhead-tc xtl-mono", style: edge ? { transform: edge === "left" ? "translateX(-2px)" : "translateX(calc(-100% + 2px))" } : undefined, children: timecode(playhead, fps) }) })] }), !total && _jsx("p", { className: "xtl-empty", children: L10N.empty })] })] }), _jsx(Scrollbar, { x: x, viewW: viewW, contentW: contentW, headW: headW, tracks: tracks, total: total, onScroll: setScroll }), tip && (_jsx("div", { className: "xtl-tip", style: { left: tip.x, top: tip.y }, role: "tooltip", children: tip.node }))] }));
 }
 function cx(...a) {
     return a.filter(Boolean).join(" ");
@@ -373,6 +382,16 @@ const MarkerRow = memo(function MarkerRow({ markers, pps, t0, t1, viewX, onMarke
                         onMarkerClick?.(m);
                     } }, key));
             }
+            if (m.kind === "note") {
+                // 点状备注:一面小旗 + 一句话,宽到下一个标记(until)为止
+                const w = m.until !== undefined ? Math.max(14, (m.until - m.t) * pps - 4) : 140;
+                return (_jsx("button", { type: "button", ...common, ...(onMarkerClick ? { "data-xtl-marker-hit": "" } : {}), className: cx("xtl-notemark", m.selected && "xtl-marker-selected"), style: { left: a * pps, maxWidth: w }, onPointerDown: onMarkerClick
+                        ? (e) => {
+                            e.stopPropagation();
+                            onMarkerClick(m);
+                        }
+                        : undefined, children: m.label }, key));
+            }
             // 切点 / 候选 / 版本:标记行底部的小刻,候选可点
             const clickable = !!onMarkerClick && (m.kind === "candidate" || m.kind === "version");
             return (_jsx("button", { type: "button", ...common, ...(clickable ? { "data-xtl-marker-hit": "" } : {}), tabIndex: clickable ? 0 : -1, className: cx("xtl-cut", `xtl-cut-${m.kind}`, m.selected && "xtl-marker-selected"), style: { left: a * pps }, onPointerDown: clickable
@@ -417,21 +436,23 @@ function ClipView({ clip: c, track, laneH, pps, viewX, viewW, isCur, selected, o
                 }) })), w > 14 && (c.label || badges.length > 0) && (_jsxs("div", { className: cx("xtl-clip-label", thin && "xtl-clip-label-thin"), children: [c.label && _jsx("span", { className: "xtl-clip-name", children: c.label }), badges.map((b, k) => (_jsx(Badge, { b: b, w: w }, k)))] })), c.sublabel && w > 44 && _jsx("span", { className: "xtl-clip-sub xtl-mono", children: c.sublabel })] }));
 }
 function Badge({ b, w }) {
+    const a = b.attrs;
     if (b.kind === "new")
-        return _jsx("span", { "aria-label": b.label ?? "new", className: "xtl-badge-new" });
+        return _jsx("span", { "aria-label": b.label ?? "new", className: "xtl-badge-new", ...a });
     if (b.kind === "error")
-        return _jsx("span", { "aria-label": b.label ?? "error", className: "xtl-badge-error" });
+        return _jsx("span", { "aria-label": b.label ?? "error", className: "xtl-badge-error", ...a });
     if (b.kind === "version")
-        return w > 70 ? _jsx("span", { className: "xtl-badge-ver xtl-mono", children: b.label }) : null;
+        return w > 70 ? _jsx("span", { className: "xtl-badge-ver xtl-mono", ...a, children: b.label }) : null;
     if (b.kind === "star")
-        return w > 40 ? _jsx("span", { className: "xtl-badge-star", children: b.label ?? "★" }) : null;
+        return w > 40 ? _jsx("span", { className: "xtl-badge-star", ...a, children: b.label ?? "★" }) : null;
     if (b.kind === "dots") {
         const n = Math.min(b.count ?? 0, 6);
         if (w <= 96 || n < 2)
             return null;
         return (_jsx("span", { className: "xtl-dots", "aria-label": b.label ?? `${b.count}`, "data-xtl-dots": "", children: Array.from({ length: n }, (_, k) => (_jsx("span", { className: k === n - 1 ? "xtl-dot xtl-dot-cur" : "xtl-dot" }, k))) }));
     }
-    return w > 60 ? _jsx("span", { className: "xtl-badge-text", children: b.label }) : null;
+    // 状态字(宿主冒烟会数它们):宽度不够时也渲染,只是视觉上被片段裁掉
+    return _jsx("span", { className: "xtl-badge-text", ...a, children: b.label });
 }
 function Filmstrip({ strip, laneH, pps, width, visA, visB }) {
     const g = stripGeom(strip, laneH - 4);

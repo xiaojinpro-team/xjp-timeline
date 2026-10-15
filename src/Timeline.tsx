@@ -106,6 +106,8 @@ export interface TimelineProps {
   onZoom?: (pps: number, fit: boolean) => void;
   onMarkerClick?: (marker: Marker) => void;
   onClipAction?: (action: ClipActionName, ctx: ClipActionContext) => void;
+  /** 双击片段(如「循环这一镜」) */
+  onClipDoubleClick?: (clip: Clip, track: Track) => void;
   /** 键 → 片段动作(只在给了 onClipAction 时生效;输入框里与带修饰键时不响应),如 `{ c: "split", m: "merge-prev" }` */
   keymap?: Partial<Record<string, ClipActionName>>;
   /** 片段悬停提示的内容(不给就用 clip.title 原生提示) */
@@ -351,8 +353,9 @@ export function Timeline(props: TimelineProps) {
   }, []);
 
   /* ── 可视区间 ── */
-  const t0 = (x - viewW * 0.5) / pps;
-  const t1 = (x + viewW * 1.5) / pps;
+  // 还没量到宽度(服务端渲染 / 首帧)时全画,免得静态首屏只剩第一段
+  const t0 = viewW ? (x - viewW * 0.5) / pps : 0;
+  const t1 = viewW ? (x + viewW * 1.5) / pps : total;
   const onVis = props.onVisibleRangeChange;
   useEffect(() => {
     if (!onVis || !viewW) return;
@@ -408,6 +411,16 @@ export function Timeline(props: TimelineProps) {
           onPointerMove={onPointerMove}
           onPointerUp={onPointerEnd}
           onPointerCancel={onPointerEnd}
+          onDoubleClick={
+            props.onClipDoubleClick
+              ? (e) => {
+                  const el = (e.target as HTMLElement).closest("[data-xtl-clip]") as HTMLElement | null;
+                  const tr = el && tracks.find((t) => t.id === el.dataset.xtlTrack);
+                  const c = tr && tr.clips.find((k) => k.id === el!.dataset.xtlClip);
+                  if (tr && c && !c.disabled) props.onClipDoubleClick!(c, tr);
+                }
+              : undefined
+          }
         >
           <div className="xtl-content" style={{ width: Math.max(contentW, viewW), transform: `translate3d(${-x}px,0,0)` }}>
             <Ruler t0={Math.max(0, x / pps)} t1={(x + viewW) / pps} pps={pps} fps={fps} total={total} />
@@ -602,6 +615,30 @@ const MarkerRow = memo(function MarkerRow({ markers, pps, t0, t1, viewX, onMarke
             />
           );
         }
+        if (m.kind === "note") {
+          // 点状备注:一面小旗 + 一句话,宽到下一个标记(until)为止
+          const w = m.until !== undefined ? Math.max(14, (m.until - m.t) * pps - 4) : 140;
+          return (
+            <button
+              key={key}
+              type="button"
+              {...common}
+              {...(onMarkerClick ? { "data-xtl-marker-hit": "" } : {})}
+              className={cx("xtl-notemark", m.selected && "xtl-marker-selected")}
+              style={{ left: a * pps, maxWidth: w }}
+              onPointerDown={
+                onMarkerClick
+                  ? (e) => {
+                      e.stopPropagation();
+                      onMarkerClick(m);
+                    }
+                  : undefined
+              }
+            >
+              {m.label}
+            </button>
+          );
+        }
         // 切点 / 候选 / 版本:标记行底部的小刻,候选可点
         const clickable = !!onMarkerClick && (m.kind === "candidate" || m.kind === "version");
         return (
@@ -730,10 +767,11 @@ function ClipView({ clip: c, track, laneH, pps, viewX, viewW, isCur, selected, o
 }
 
 function Badge({ b, w }: { b: NonNullable<Clip["badges"]>[number]; w: number }) {
-  if (b.kind === "new") return <span aria-label={b.label ?? "new"} className="xtl-badge-new" />;
-  if (b.kind === "error") return <span aria-label={b.label ?? "error"} className="xtl-badge-error" />;
-  if (b.kind === "version") return w > 70 ? <span className="xtl-badge-ver xtl-mono">{b.label}</span> : null;
-  if (b.kind === "star") return w > 40 ? <span className="xtl-badge-star">{b.label ?? "★"}</span> : null;
+  const a = b.attrs;
+  if (b.kind === "new") return <span aria-label={b.label ?? "new"} className="xtl-badge-new" {...a} />;
+  if (b.kind === "error") return <span aria-label={b.label ?? "error"} className="xtl-badge-error" {...a} />;
+  if (b.kind === "version") return w > 70 ? <span className="xtl-badge-ver xtl-mono" {...a}>{b.label}</span> : null;
+  if (b.kind === "star") return w > 40 ? <span className="xtl-badge-star" {...a}>{b.label ?? "★"}</span> : null;
   if (b.kind === "dots") {
     const n = Math.min(b.count ?? 0, 6);
     if (w <= 96 || n < 2) return null;
@@ -745,7 +783,8 @@ function Badge({ b, w }: { b: NonNullable<Clip["badges"]>[number]; w: number }) 
       </span>
     );
   }
-  return w > 60 ? <span className="xtl-badge-text">{b.label}</span> : null;
+  // 状态字(宿主冒烟会数它们):宽度不够时也渲染,只是视觉上被片段裁掉
+  return <span className="xtl-badge-text" {...a}>{b.label}</span>;
 }
 
 function Filmstrip({ strip, laneH, pps, width, visA, visB }: { strip: NonNullable<Clip["thumbStrip"]>; laneH: number; pps: number; width: number; visA: number; visB: number }) {

@@ -24,6 +24,17 @@ import "@xjp/timeline/styles.css";
 
 Next.js 里组件已带 `"use client"`;直接在客户端组件里用。
 
+**构建机没有 git / 连不上 GitHub 时**(例:launchreel 的 Docker 构建 `node:24-bookworm-slim` + pnpm frozen lockfile,构建机在境内):
+把打好的 tag 包成 tarball 放进宿主仓库,依赖写本地文件,构建不联网:
+
+```bash
+git -C xjp-timeline checkout vX.Y.Z && (cd xjp-timeline && npm pack)      # → xjp-timeline-X.Y.Z.tgz
+cp xjp-timeline/xjp-timeline-X.Y.Z.tgz <host>/vendor/ && (cd <host> && pnpm add @xjp/timeline@file:vendor/xjp-timeline-X.Y.Z.tgz)
+```
+
+tarball 只能来自某个 tag 的 `npm pack`(不要手改 vendor 里的内容);升级 = 换新 tag 的 tgz、删旧的。
+**样式**:能 import CSS 的宿主组件里 `import "@xjp/timeline/styles.css"`;若宿主的 node 单测会直接 import 组件(Node 不认 .css),改在全局样式里 `@import "@xjp/timeline/styles.css";`。
+
 ## 数据模型
 
 时间一律是**秒**。宿主把自己的业务翻译成下面这套,时间轴不认识任何宿主概念。
@@ -44,6 +55,7 @@ Next.js 里组件已带 `"use client"`;直接在客户端组件里用。
   onZoom={(pps, fit) => …}
   onMarkerClick={(marker) => …}    // missing / candidate / version 可点
   onClipAction={(action, { t, clip, track }) => …}
+  onClipDoubleClick={(clip, track) => …}
   keymap={{ c: "split", m: "merge-prev", "[": "set-in", "]": "set-out" }}
   renderTooltip={(clip, track) => <…/>}
   onVisibleRangeChange={(t0, t1) => …}   // 按需加载缩略图 / 峰值
@@ -79,7 +91,7 @@ interface Clip {
 
 interface Marker {
   t: number; until?: number;
-  kind: "chapter" | "change" | "version" | "cut-hard" | "cut-soft" | "cut-manual" | "candidate" | "missing";
+  kind: "chapter" | "change" | "version" | "cut-hard" | "cut-soft" | "cut-manual" | "candidate" | "missing" | "note";
   label?: string; title?: string; selected?: boolean; id?: string; attrs?: …;
 }
 ```
@@ -98,6 +110,7 @@ interface Marker {
 | Part 章节 | `markers: {kind:"chapter", t, until, label}`(滚出去时标题贴左边) |
 | 改动说明 | `markers: {kind:"change", t, until, label}` |
 | 没视频的镜 | `markers: {kind:"missing", t, label}`(同一时刻多个并排,可点) |
+| 点状备注(可点) | `markers: {kind:"note", t, until?, label}` |
 | 硬切 / 软切 / 手切 / 软切候选 | `markers: {kind:"cut-hard"|"cut-soft"|"cut-manual"|"candidate", t}`(候选可点) |
 | 选为复刻的镜头 | `highlight: "selected-for"` 或 `badges:[{kind:"star",label:"复刻"}]` |
 

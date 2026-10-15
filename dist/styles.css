@@ -173,6 +173,13 @@
 }
 .xtl-cut-candidate:hover { filter: brightness(1.25); }
 .xtl-marker-selected { outline: 2px solid var(--xtl-select); outline-offset: 1px; }
+.xtl-notemark {
+  position: absolute; bottom: 2px; height: 16px; padding: 0 5px 0 6px; border: 0; cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: inherit; font-size: 10px; line-height: 16px;
+  color: var(--xtl-text); background: color-mix(in srgb, var(--xtl-note, #f2c94c) 22%, transparent);
+  border-left: 2px solid var(--xtl-note, #f2c94c); border-radius: 0 3px 3px 0;
+}
+.xtl-notemark[data-dim="1"] { opacity: 0.55; }
 
 /* 轨道 */
 .xtl-lanes { position: relative; outline: none; }

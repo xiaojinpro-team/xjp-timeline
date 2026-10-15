@@ -49,6 +49,7 @@ export interface ClipBadge {
   kind: "version" | "dots" | "new" | "error" | "text" | "star";
   label?: string;
   count?: number;
+  attrs?: DataAttrs;
 }
 
 export type DataAttrs = Record<`data-${string}`, string | number | boolean | undefined>;
@@ -90,7 +91,7 @@ export interface Track {
   clips: Clip[];
 }
 
-export type MarkerKind = "chapter" | "change" | "version" | "cut-hard" | "cut-soft" | "cut-manual" | "candidate" | "missing";
+export type MarkerKind = "chapter" | "change" | "version" | "cut-hard" | "cut-soft" | "cut-manual" | "candidate" | "missing" | "note";
 
 export interface Marker {
   id?: string;
