@@ -1,0 +1,29 @@
+{
+  "name": "@xjp/timeline",
+  "version": "0.1.0",
+  "description": "Shared multi-track timeline for xjp sites: Premiere-style tracks, FCPX look. React, zero runtime deps.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": ["*.css"],
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js", "default": "./dist/index.js" },
+    "./styles.css": "./dist/styles.css",
+    "./package.json": "./package.json"
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "repository": { "type": "git", "url": "https://github.com/xiaojinpro-team/xjp-timeline.git" },
+  "peerDependencies": { "react": ">=18" },
+  "devDependencies": {
+    "@types/react": "^19.2.7",
+    "react": "^19.2.3",
+    "typescript": "^5.9.3"
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.json && cp src/styles.css dist/styles.css",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "release:check": "npm test && git diff --exit-code -- dist"
+  }
+}
