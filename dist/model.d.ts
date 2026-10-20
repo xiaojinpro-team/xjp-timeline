@@ -142,3 +142,11 @@ export declare function peaksFromJson(j: unknown): number[] | null;
 export declare const intersects: (a: number, b: number, t0: number, t1: number) => boolean;
 /** 某条轨在 t 处的片段(播放头所在的那段)。 */
 export declare function clipAt(track: Track | undefined, t: number): Clip | undefined;
+export type GestureMode = "idle" | "scrub" | "maybe-pan" | "pan" | "pinch";
+/**
+ * 拖动中收到一个 pointermove,却已经没有按键按着(鼠标在控件外松开、浏览器把 pointerup 吞了 / 丢了 capture):
+ * 这次拖动其实早结束了,必须当场收尾,不然鼠标回来「不按也跟着走」。
+ */
+export declare function isStaleDrag(mode: GestureMode, pointerType: string, buttons: number): boolean;
+/** 划过预览只在:开着、没在播、没有拖动 / 手势、鼠标(或笔)悬停时生效;触屏没有悬停。 */
+export declare function canSkim(on: boolean, playing: boolean, mode: GestureMode, pointerType: string): boolean;

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { rulerTicks, rulerLabel, timecode, stripGeom, stripTiles, waveformPath, peaksFromJson, clampPps, clampScroll, zoomAround, ppsToSlider, sliderToPps, clipAt, trackToggle, trackOff, fitPps } from "../dist/model.js";
+import { rulerTicks, rulerLabel, timecode, stripGeom, stripTiles, waveformPath, peaksFromJson, clampPps, clampScroll, zoomAround, ppsToSlider, sliderToPps, clipAt, trackToggle, trackOff, fitPps, isStaleDrag, canSkim } from "../dist/model.js";
 
 test("刻度:整片时整秒标签,放大到帧级带 f", () => {
   const coarse = rulerTicks(0, 288, 3.7, 25).filter((t) => t.major);
@@ -52,4 +52,21 @@ test("轨道开关默认与播放头所在片段", () => {
   const tr = { id: "V1", kind: "video", name: "", clips: [{ id: "a", start: 0, end: 2 }, { id: "b", start: 2, end: 5 }] };
   assert.equal(clipAt(tr, 2).id, "b");
   assert.equal(clipAt(tr, 5).id, "b");
+});
+
+test("拖动收尾:拖动中收到没按键的鼠标 move = 早已松手;触屏 / 笔与非拖动不算", () => {
+  assert.equal(isStaleDrag("scrub", "mouse", 0), true, "左键已松开");
+  assert.equal(isStaleDrag("scrub", "mouse", 2), true, "只剩右键也算松了左键");
+  assert.equal(isStaleDrag("scrub", "mouse", 1), false, "还按着");
+  assert.equal(isStaleDrag("idle", "mouse", 0), false);
+  assert.equal(isStaleDrag("scrub", "touch", 0), false, "触屏 move 的 buttons 不可靠,不据此收尾");
+});
+
+test("划过预览:开着、没在播、没在拖、非触屏才生效", () => {
+  assert.equal(canSkim(true, false, "idle", "mouse"), true);
+  assert.equal(canSkim(true, false, "idle", "pen"), true);
+  assert.equal(canSkim(false, false, "idle", "mouse"), false, "关着");
+  assert.equal(canSkim(true, true, "idle", "mouse"), false, "播放中暂停");
+  assert.equal(canSkim(true, false, "scrub", "mouse"), false, "拖动中让位");
+  assert.equal(canSkim(true, false, "idle", "touch"), false, "触屏没有悬停");
 });

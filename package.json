@@ -1,6 +1,6 @@
 {
   "name": "@xjp/timeline",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Shared multi-track timeline for xjp sites: Premiere-style tracks, FCPX look. React, zero runtime deps.",
   "license": "MIT",
   "type": "module",

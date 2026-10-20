@@ -56,6 +56,9 @@ tarball 只能来自某个 tag 的 `npm pack`(不要手改 vendor 里的内容);
   onMarkerClick={(marker) => …}    // missing / candidate / version 可点
   onClipAction={(action, { t, clip, track }) => …}
   onClipDoubleClick={(clip, track) => …}
+  skim={bool} playing={bool}             // 划过预览开关(宿主存);宿主在播放时划过暂停
+  onSkimToggle={(on, via) => …}          // 给了才出「划过预览」按钮 + S 键;宿主存 localStorage、记操作
+  onSkim={(t, why) => …}                 // t = 划过的秒(动画帧节流);null = 结束,why ≠ "press" 时把画面拉回播放头
   keymap={{ c: "split", m: "merge-prev", "[": "set-in", "]": "set-out" }}
   renderTooltip={(clip, track) => <…/>}
   onVisibleRangeChange={(t0, t1) => …}   // 按需加载缩略图 / 峰值
@@ -114,7 +117,11 @@ interface Marker {
 | 硬切 / 软切 / 手切 / 软切候选 | `markers: {kind:"cut-hard"|"cut-soft"|"cut-manual"|"candidate", t}`(候选可点) |
 | 选为复刻的镜头 | `highlight: "selected-for"` 或 `badges:[{kind:"star",label:"复刻"}]` |
 
-**交互**:鼠标点 / 拖 = 跳(片段上同时 onSelect);触屏轻点 = 跳、单指拖 = 滚、双指 = 缩放;⌘/Ctrl + 滚轮、触控板捏合(含 Safari gesture)= 以指针为不动点缩放;
+**划过预览**(v0.3.0,FCPX skimming):开着时鼠标划过刻度或轨道出黄色细线,`onSkim(t)` 让宿主把**画面**换到那一帧,播放头不动;
+离开时间线 `onSkim(null, "leave")` → 宿主把画面拉回播放头;按下(点 / 拖)`"press"` → 播放头随后由 onSeek 定,别拉回;
+`playing` 为真时不划(FCPX 同款),开始播放给 `"playing"`;拖动中划过让位。
+
+**交互**:鼠标点 / 拖 = 跳(片段上同时 onSelect);拖动用 pointer capture,拖出控件 / 窗外照样跟,松手 / 丢 capture / 失焦 / Esc 都收尾;触屏轻点 = 跳、单指拖 = 滚、双指 = 缩放;⌘/Ctrl + 滚轮、触控板捏合(含 Safari gesture)= 以指针为不动点缩放;
 触控板左右划 / ⇧ + 滚轮 / 拖底部滚动条 = 横向滚(滚动条上有改动高亮小地图)。只渲染可视区附近的片段;滚动与缩放都只改 transform。
 
 **主题**:`theme="light"` 换浅色变量;宿主可在 `.xtl` 上覆盖任何 `--xtl-*`(例:`.xtl { --xtl-accent: hsl(var(--brand-accent)); }`)。

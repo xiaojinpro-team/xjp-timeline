@@ -6,6 +6,10 @@
  *   · 缩放:滑杆(对数)、− / + / 适应、⌘ 或 Ctrl + 滚轮、触控板捏合(含 Safari gesture)、触屏双指。
  *     横向滚:触控板左右划、⇧ + 滚轮、拖底部滚动条(带高亮小地图)、触屏单指拖。
  *   · 鼠标在刻度或轨道上点 / 拖 = onSeek(连续);点在片段上同时 onSelect;触屏轻点 = 跳,拖 = 滚。
+ *     拖动用 pointer capture:拖出控件(上下左右、甚至出窗口)照样跟,时间夹在 [0, 片长];松手 / 取消 / 丢 capture /
+ *     窗口失焦 / Esc 都收尾,收尾后悬停绝不再动播放头(拖动中收到「没按键」的 move 也当场收尾)。
+ *   · 划过预览(FCPX skimming,`skim` + `onSkim`):鼠标划过刻度或轨道 = 一根细线 + onSkim(t)(按动画帧节流),播放头不动;
+ *     离开 / 按下 / 播放中 / 关掉 = onSkim(null, why)。给了 onSkimToggle 才出「划过预览」按钮与 S 键。
  *   · 播放头跑出视口(播放中 follow,或键盘跳转)时自动翻页;用户自己滚开的不抢。
  *
  * 宿主负责:把业务翻译成 tracks / markers,接 onSeek / onSelect / onToggleTrack / onClipAction,给缩略图与峰值的地址或数组。
@@ -26,8 +30,14 @@ export interface TimelineLabels {
     timeline: string;
     empty: string;
     missing: string;
+    skim: string;
+    skimTitle: string;
+    skimming: string;
 }
 export declare const ZH_LABELS: TimelineLabels;
+export declare const EN_LABELS: TimelineLabels;
+/** 划过预览结束的原因:离开时间线 / 按下(点或拖,播放头随后由 onSeek 定)/ 开始播放 / 关掉开关 */
+export type SkimEnd = "leave" | "press" | "playing" | "off";
 export interface ClipActionContext {
     t: number;
     clip?: Clip;
@@ -74,5 +84,15 @@ export interface TimelineProps {
     className?: string;
     /** 根元素上的 data-* */
     attrs?: DataAttrs;
+    /** 划过预览(FCPX skimming)开着 */
+    skim?: boolean;
+    /** 给了才出「划过预览」开关按钮与快捷键;via = 点按钮还是按键 */
+    onSkimToggle?: (on: boolean, via: "button" | "key") => void;
+    /** 划过的时间(秒,按动画帧节流);null = 结束(why 说明原因,"press" 时宿主别把画面拉回旧播放头) */
+    onSkim?: (t: number | null, why?: SkimEnd) => void;
+    /** 宿主在播放:划过预览暂停(FCPX 同款) */
+    playing?: boolean;
+    /** 开关划过预览的键(不带修饰键;输入框里不响应);默认 "s" */
+    skimKey?: string;
 }
 export declare function Timeline(props: TimelineProps): import("react/jsx-runtime").JSX.Element;

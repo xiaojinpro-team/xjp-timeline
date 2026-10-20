@@ -8,6 +8,10 @@
  *   · 缩放:滑杆(对数)、− / + / 适应、⌘ 或 Ctrl + 滚轮、触控板捏合(含 Safari gesture)、触屏双指。
  *     横向滚:触控板左右划、⇧ + 滚轮、拖底部滚动条(带高亮小地图)、触屏单指拖。
  *   · 鼠标在刻度或轨道上点 / 拖 = onSeek(连续);点在片段上同时 onSelect;触屏轻点 = 跳,拖 = 滚。
+ *     拖动用 pointer capture:拖出控件(上下左右、甚至出窗口)照样跟,时间夹在 [0, 片长];松手 / 取消 / 丢 capture /
+ *     窗口失焦 / Esc 都收尾,收尾后悬停绝不再动播放头(拖动中收到「没按键」的 move 也当场收尾)。
+ *   · 划过预览(FCPX skimming,`skim` + `onSkim`):鼠标划过刻度或轨道 = 一根细线 + onSkim(t)(按动画帧节流),播放头不动;
+ *     离开 / 按下 / 播放中 / 关掉 = onSkim(null, why)。给了 onSkimToggle 才出「划过预览」按钮与 S 键。
  *   · 播放头跑出视口(播放中 follow,或键盘跳转)时自动翻页;用户自己滚开的不抢。
  *
  * 宿主负责:把业务翻译成 tracks / markers,接 onSeek / onSelect / onToggleTrack / onClipAction,给缩略图与峰值的地址或数组。
@@ -21,8 +25,10 @@ import {
   clipAt,
   DEFAULT_MAX_PPS,
   DEFAULT_MIN_USABLE_PPS,
+  canSkim,
   fitPps,
   intersects,
+  isStaleDrag,
   peaksFromJson,
   ppsToSlider,
   rulerTicks,
@@ -38,6 +44,7 @@ import {
   type Clip,
   type ClipActionName,
   type DataAttrs,
+  type GestureMode,
   type Marker,
   type Peaks,
   type Track,
@@ -61,6 +68,9 @@ export interface TimelineLabels {
   timeline: string;
   empty: string;
   missing: string;
+  skim: string;
+  skimTitle: string;
+  skimming: string;
 }
 
 export const ZH_LABELS: TimelineLabels = {
@@ -77,7 +87,32 @@ export const ZH_LABELS: TimelineLabels = {
   timeline: "时间线",
   empty: "还没有内容",
   missing: "还没有视频",
+  skim: "划过预览",
+  skimTitle: "鼠标划过时间线就预览那一帧,播放头不动(S)",
+  skimming: "划过",
 };
+
+export const EN_LABELS: TimelineLabels = {
+  zoomIn: "Zoom in",
+  zoomOut: "Zoom out",
+  zoomSlider: "Timeline zoom",
+  fit: "Fit",
+  fitTitle: "Fit the whole film in view",
+  visible: "Showing",
+  hide: "Hide",
+  show: "Show",
+  mute: "Mute",
+  unmute: "Unmute",
+  timeline: "Timeline",
+  empty: "Nothing here yet",
+  missing: "No video yet",
+  skim: "Skim",
+  skimTitle: "Hover over the timeline to preview that frame without moving the playhead (S)",
+  skimming: "Skim",
+};
+
+/** 划过预览结束的原因:离开时间线 / 按下(点或拖,播放头随后由 onSeek 定)/ 开始播放 / 关掉开关 */
+export type SkimEnd = "leave" | "press" | "playing" | "off";
 
 export interface ClipActionContext {
   t: number;
@@ -126,6 +161,16 @@ export interface TimelineProps {
   className?: string;
   /** 根元素上的 data-* */
   attrs?: DataAttrs;
+  /** 划过预览(FCPX skimming)开着 */
+  skim?: boolean;
+  /** 给了才出「划过预览」开关按钮与快捷键;via = 点按钮还是按键 */
+  onSkimToggle?: (on: boolean, via: "button" | "key") => void;
+  /** 划过的时间(秒,按动画帧节流);null = 结束(why 说明原因,"press" 时宿主别把画面拉回旧播放头) */
+  onSkim?: (t: number | null, why?: SkimEnd) => void;
+  /** 宿主在播放:划过预览暂停(FCPX 同款) */
+  playing?: boolean;
+  /** 开关划过预览的键(不带修饰键;输入框里不响应);默认 "s" */
+  skimKey?: string;
 }
 
 export function Timeline(props: TimelineProps) {
@@ -229,7 +274,7 @@ export function Timeline(props: TimelineProps) {
   }, []);
 
   /* ── 指针 ── */
-  const gesture = useRef<{ pointers: Map<number, { x: number; y: number }>; mode: "idle" | "scrub" | "maybe-pan" | "pan" | "pinch"; startX: number; startScroll: number; pinch?: { d0: number; pps0: number; x0: number; mid0: number } }>({
+  const gesture = useRef<{ pointers: Map<number, { x: number; y: number }>; mode: GestureMode; startX: number; startScroll: number; pinch?: { d0: number; pps0: number; x0: number; mid0: number } }>({
     pointers: new Map(),
     mode: "idle",
     startX: 0,
@@ -249,14 +294,100 @@ export function Timeline(props: TimelineProps) {
     const c = tr?.clips.find((k) => k.id === el.dataset.xtlClip);
     if (tr && c && !c.disabled) props.onSelect(c, tr);
   };
+  /* 划过预览:位置按动画帧节流交给宿主;线自己画 */
+  const [skimT, setSkimT] = useState<number | null>(null);
+  const skimLive = useRef<{ t: number | null; raf: number | null; sent: number | null }>({ t: null, raf: null, sent: null });
+  const propsRef = useRef(props);
+  useLayoutEffect(() => {
+    propsRef.current = props;
+  });
+  const skimTo = (t: number) => {
+    const s = skimLive.current;
+    s.t = t;
+    setSkimT(t);
+    if (s.raf !== null) return;
+    s.raf = window.requestAnimationFrame(() => {
+      s.raf = null;
+      if (s.t === null || s.t === s.sent) return;
+      s.sent = s.t;
+      propsRef.current.onSkim?.(s.t);
+    });
+  };
+  const endSkim = (why: SkimEnd) => {
+    const s = skimLive.current;
+    if (s.raf !== null) window.cancelAnimationFrame(s.raf);
+    s.raf = null;
+    const was = s.t !== null || s.sent !== null;
+    s.t = null;
+    s.sent = null;
+    setSkimT(null);
+    if (was) propsRef.current.onSkim?.(null, why);
+  };
+  const skimOn = !!props.skim;
+  const hostPlaying = !!props.playing;
+  useEffect(() => {
+    if (!skimOn) endSkim("off");
+    else if (hostPlaying) endSkim("playing");
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- endSkim 只读 ref
+  }, [skimOn, hostPlaying]);
+  useEffect(
+    () => () => {
+      const s = skimLive.current;
+      if (s.raf !== null) window.cancelAnimationFrame(s.raf);
+    },
+    [],
+  );
+
+  /* 拖动收尾:pointerup / pointercancel 之外,丢 capture、窗口失焦、Esc、「没按键的 move」都算松手 */
+  const winOff = useRef<(() => void) | null>(null);
+  const endGesture = (pointerId: number | null) => {
+    const g = gesture.current;
+    const ids = pointerId === null ? [...g.pointers.keys()] : [pointerId];
+    if (!ids.some((id) => g.pointers.delete(id))) return;
+    if (g.mode === "pinch") propsRef.current.onZoom?.(live.current.pps, false);
+    const el = viewport.current;
+    for (const id of ids) if (el?.hasPointerCapture?.(id)) el.releasePointerCapture(id);
+    if (g.pointers.size === 0) {
+      g.mode = "idle";
+      setScrubbing(false);
+      winOff.current?.();
+      winOff.current = null;
+    } else if (g.mode === "pinch") g.mode = "idle";
+  };
+  const endRef = useRef(endGesture);
+  useLayoutEffect(() => {
+    endRef.current = endGesture;
+  });
+  const armWindow = () => {
+    if (winOff.current) return;
+    const up = (e: PointerEvent) => endRef.current(e.pointerId);
+    const all = () => endRef.current(null);
+    const esc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") all();
+    };
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+    window.addEventListener("blur", all);
+    window.addEventListener("keydown", esc);
+    winOff.current = () => {
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      window.removeEventListener("blur", all);
+      window.removeEventListener("keydown", esc);
+    };
+  };
+  useEffect(() => () => winOff.current?.(), []);
+
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0 && e.pointerType === "mouse") return;
     if ((e.target as HTMLElement).closest("[data-xtl-marker-hit]")) return;
     const g = gesture.current;
     const el = viewport.current;
     if (!el) return;
+    endSkim("press");
     g.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     el.setPointerCapture?.(e.pointerId);
+    armWindow();
     const onRuler = (e.target as HTMLElement).closest("[data-xtl-ruler]") !== null;
     if (g.pointers.size === 2 && e.pointerType === "touch") {
       const [a, b] = [...g.pointers.values()];
@@ -279,7 +410,15 @@ export function Timeline(props: TimelineProps) {
   };
   const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const g = gesture.current;
-    if (!g.pointers.has(e.pointerId)) return;
+    if (!g.pointers.has(e.pointerId)) {
+      if (canSkim(skimOn, hostPlaying, g.mode, e.pointerType) && g.pointers.size === 0 && (e.buttons & 1) === 0) skimTo(tAtClient(e.clientX));
+      return;
+    }
+    if (isStaleDrag(g.mode, e.pointerType, e.buttons)) {
+      // 早就松手了(pointerup 没到我们这儿):收尾,这一下 move 不算拖
+      endGesture(e.pointerId);
+      return;
+    }
     g.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (g.mode === "scrub") props.onSeek(tAtClient(e.clientX));
     else if (g.mode === "maybe-pan" && Math.abs(e.clientX - g.startX) > 6) g.mode = "pan";
@@ -303,12 +442,7 @@ export function Timeline(props: TimelineProps) {
       selectAt(e.target);
       props.onSeek(tAtClient(e.clientX));
     }
-    if (g.mode === "pinch") props.onZoom?.(live.current.pps, false);
-    g.pointers.delete(e.pointerId);
-    if (g.pointers.size === 0) {
-      g.mode = "idle";
-      setScrubbing(false);
-    } else if (g.mode === "pinch") g.mode = "idle";
+    endGesture(e.pointerId);
   };
 
   /* ── 跟随播放头 ── */
@@ -329,9 +463,15 @@ export function Timeline(props: TimelineProps) {
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       const P = keymapRef.current;
-      if (!P.keymap || !P.onClipAction || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      if (P.onSkimToggle && !e.shiftKey && !e.repeat && e.key.toLowerCase() === (P.skimKey ?? "s").toLowerCase()) {
+        e.preventDefault();
+        P.onSkimToggle(!P.skim, "key");
+        return;
+      }
+      if (!P.keymap || !P.onClipAction) return;
       const action = P.keymap[e.key];
       if (!action) return;
       e.preventDefault();
@@ -366,7 +506,8 @@ export function Timeline(props: TimelineProps) {
   /* ── 布局 ── */
   const contentW = total * pps;
   const narrow = viewW > 0 && viewW < 480;
-  const headW = narrow ? 64 : 112;
+  // 128:两个字的轨名 + 四个字的(「文字背景」)都放得下,不再截成「文字…」
+  const headW = narrow ? 64 : 128;
   const lanesH = tracks.reduce((n, t) => n + trackHeight(t), 0);
   const edge = playhead * pps - x < 34 ? "left" : playhead * pps - x > viewW - 34 ? "right" : null;
 
@@ -388,6 +529,19 @@ export function Timeline(props: TimelineProps) {
         <div className="xtl-toolbar-start">{props.toolbarStart}</div>
         <div className="xtl-toolbar-end">
           {props.toolbarEnd}
+          {props.onSkimToggle && (
+            <button
+              type="button"
+              className={cx("xtl-btn xtl-btn-wide", skimOn && "xtl-btn-on")}
+              aria-pressed={skimOn}
+              title={L10N.skimTitle}
+              data-xtl-skim-toggle=""
+              onClick={() => props.onSkimToggle!(!skimOn, "button")}
+            >
+              <Svg size={12}>{Icon.skim}</Svg>
+              <span>{L10N.skim}</span>
+            </button>
+          )}
           <ZoomControl pps={pps} minPps={minPps} maxPps={maxPps} viewW={viewW} onZoom={(p) => setZoom(p)} onFit={fitAll} fitOn={fitMode} L={L10N} />
         </div>
       </header>
@@ -395,7 +549,14 @@ export function Timeline(props: TimelineProps) {
       <div className="xtl-body">
         <div className="xtl-heads" style={{ width: headW }}>
           <div className="xtl-corner" style={{ height: RULER_H + MARK_H }}>
-            {props.corner ?? <span className="xtl-mono xtl-faint">{timecode(playhead, fps)}</span>}
+            {skimT !== null ? (
+              <span className="xtl-corner-skim xtl-mono" data-xtl-skim-readout="">
+                <span className="xtl-corner-skim-tag">{L10N.skimming}</span>
+                {timecode(skimT, fps)}
+              </span>
+            ) : (
+              (props.corner ?? <span className="xtl-mono xtl-faint">{timecode(playhead, fps)}</span>)
+            )}
           </div>
           {tracks.map((t) => (
             <TrackHead key={t.id} track={t} narrow={narrow} L={L10N} onToggle={props.onToggleTrack ? () => props.onToggleTrack!(t.id) : undefined} />
@@ -406,11 +567,17 @@ export function Timeline(props: TimelineProps) {
         <div
           ref={viewport}
           data-xtl-viewport=""
-          className={cx("xtl-viewport", scrubbing && "xtl-scrubbing")}
+          data-xtl-skim={skimOn ? "on" : "off"}
+          className={cx("xtl-viewport", scrubbing && "xtl-scrubbing", skimOn && "xtl-skim-on")}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerEnd}
           onPointerCancel={onPointerEnd}
+          onLostPointerCapture={(e) => endGesture(e.pointerId)}
+          onPointerLeave={(e) => {
+            if (!gesture.current.pointers.has(e.pointerId)) endSkim("leave");
+          }}
+          onDragStart={(e) => e.preventDefault()}
           onDoubleClick={
             props.onClipDoubleClick
               ? (e) => {
@@ -439,6 +606,11 @@ export function Timeline(props: TimelineProps) {
             >
               <Lanes tracks={tracks} pps={pps} t0={t0} t1={t1} viewX={x} viewW={viewW} playhead={playhead} selection={selection} onHover={onClipHover} />
             </div>
+            {skimT !== null && (
+              <div data-xtl-skimmer="" className="xtl-skimmer" style={{ transform: `translate3d(${skimT * pps}px,0,0)` }}>
+                <span className="xtl-skimmer-tc xtl-mono">{timecode(skimT, fps)}</span>
+              </div>
+            )}
             <div data-xtl-playhead="" className="xtl-playhead" style={{ transform: `translate3d(${playhead * pps}px,0,0)` }}>
               <span className="xtl-playhead-tc xtl-mono" style={edge ? { transform: edge === "left" ? "translateX(-2px)" : "translateX(calc(-100% + 2px))" } : undefined}>
                 {timecode(playhead, fps)}
@@ -478,6 +650,7 @@ const Icon = {
   eyeOff: <path d="M3 3l18 18M10.6 5.1A10.4 10.4 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.6C3.9 8.4 2 12 2 12s3.5 7 10 7a9.7 9.7 0 0 0 5.4-1.6M9.9 9.9a3 3 0 0 0 4.2 4.2" />,
   vol: <path d="M11 5 6 9H2v6h4l5 4V5zM15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14" />,
   volOff: <path d="M11 5 6 9H2v6h4l5 4V5zM22 9l-6 6M16 9l6 6" />,
+  skim: <path d="M12 3v18M5 8l-3 4 3 4M19 8l3 4-3 4" />,
 };
 
 function Svg({ children, size = 14 }: { children: ReactNode; size?: number }) {
@@ -534,7 +707,11 @@ function TrackHead({ track, narrow, L, onToggle }: { track: Track; narrow: boole
   return (
     <div className={cx("xtl-head", narrow && "xtl-head-narrow", off && "xtl-head-off")} style={{ height: trackHeight(track) }} data-xtl-head={track.id}>
       <span className={cx("xtl-chip xtl-mono", `xtl-kind-${track.kind}`)}>{track.id}</span>
-      {!narrow && <span className="xtl-head-name">{track.name}</span>}
+      {!narrow && (
+        <span className="xtl-head-name" title={track.name}>
+          {track.name}
+        </span>
+      )}
       {mode !== "none" && onToggle && (
         <button type="button" aria-pressed={off} aria-label={`${track.id} ${track.name} ${verb}`} title={`${verb} ${track.id} ${track.name}${track.toggleHint ? `(${track.toggleHint})` : ""}`} data-xtl-toggle={track.id} onClick={onToggle} className="xtl-iconbtn">
           <Svg>{mode === "mute" ? (off ? Icon.volOff : Icon.vol) : off ? Icon.eyeOff : Icon.eye}</Svg>

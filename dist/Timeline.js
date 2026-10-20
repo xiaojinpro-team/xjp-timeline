@@ -8,12 +8,16 @@ import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-run
  *   · 缩放:滑杆(对数)、− / + / 适应、⌘ 或 Ctrl + 滚轮、触控板捏合(含 Safari gesture)、触屏双指。
  *     横向滚:触控板左右划、⇧ + 滚轮、拖底部滚动条(带高亮小地图)、触屏单指拖。
  *   · 鼠标在刻度或轨道上点 / 拖 = onSeek(连续);点在片段上同时 onSelect;触屏轻点 = 跳,拖 = 滚。
+ *     拖动用 pointer capture:拖出控件(上下左右、甚至出窗口)照样跟,时间夹在 [0, 片长];松手 / 取消 / 丢 capture /
+ *     窗口失焦 / Esc 都收尾,收尾后悬停绝不再动播放头(拖动中收到「没按键」的 move 也当场收尾)。
+ *   · 划过预览(FCPX skimming,`skim` + `onSkim`):鼠标划过刻度或轨道 = 一根细线 + onSkim(t)(按动画帧节流),播放头不动;
+ *     离开 / 按下 / 播放中 / 关掉 = onSkim(null, why)。给了 onSkimToggle 才出「划过预览」按钮与 S 键。
  *   · 播放头跑出视口(播放中 follow,或键盘跳转)时自动翻页;用户自己滚开的不抢。
  *
  * 宿主负责:把业务翻译成 tracks / markers,接 onSeek / onSelect / onToggleTrack / onClipAction,给缩略图与峰值的地址或数组。
  */
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { clampPps, clampScroll, clipAt, DEFAULT_MAX_PPS, DEFAULT_MIN_USABLE_PPS, fitPps, intersects, peaksFromJson, ppsToSlider, rulerTicks, sliderToPps, stripGeom, stripTiles, timecode, trackHeight, trackOff, trackToggle, waveformPath, zoomAround, } from "./model.js";
+import { clampPps, clampScroll, clipAt, DEFAULT_MAX_PPS, DEFAULT_MIN_USABLE_PPS, canSkim, fitPps, intersects, isStaleDrag, peaksFromJson, ppsToSlider, rulerTicks, sliderToPps, stripGeom, stripTiles, timecode, trackHeight, trackOff, trackToggle, waveformPath, zoomAround, } from "./model.js";
 const RULER_H = 24;
 const MARK_H = 36;
 const SCROLLBAR_H = 12;
@@ -31,6 +35,27 @@ export const ZH_LABELS = {
     timeline: "时间线",
     empty: "还没有内容",
     missing: "还没有视频",
+    skim: "划过预览",
+    skimTitle: "鼠标划过时间线就预览那一帧,播放头不动(S)",
+    skimming: "划过",
+};
+export const EN_LABELS = {
+    zoomIn: "Zoom in",
+    zoomOut: "Zoom out",
+    zoomSlider: "Timeline zoom",
+    fit: "Fit",
+    fitTitle: "Fit the whole film in view",
+    visible: "Showing",
+    hide: "Hide",
+    show: "Show",
+    mute: "Mute",
+    unmute: "Unmute",
+    timeline: "Timeline",
+    empty: "Nothing here yet",
+    missing: "No video yet",
+    skim: "Skim",
+    skimTitle: "Hover over the timeline to preview that frame without moving the playhead (S)",
+    skimming: "Skim",
 };
 export function Timeline(props) {
     const { fps, duration: total, tracks, playhead, follow = false } = props;
@@ -153,6 +178,100 @@ export function Timeline(props) {
         if (tr && c && !c.disabled)
             props.onSelect(c, tr);
     };
+    /* 划过预览:位置按动画帧节流交给宿主;线自己画 */
+    const [skimT, setSkimT] = useState(null);
+    const skimLive = useRef({ t: null, raf: null, sent: null });
+    const propsRef = useRef(props);
+    useLayoutEffect(() => {
+        propsRef.current = props;
+    });
+    const skimTo = (t) => {
+        const s = skimLive.current;
+        s.t = t;
+        setSkimT(t);
+        if (s.raf !== null)
+            return;
+        s.raf = window.requestAnimationFrame(() => {
+            s.raf = null;
+            if (s.t === null || s.t === s.sent)
+                return;
+            s.sent = s.t;
+            propsRef.current.onSkim?.(s.t);
+        });
+    };
+    const endSkim = (why) => {
+        const s = skimLive.current;
+        if (s.raf !== null)
+            window.cancelAnimationFrame(s.raf);
+        s.raf = null;
+        const was = s.t !== null || s.sent !== null;
+        s.t = null;
+        s.sent = null;
+        setSkimT(null);
+        if (was)
+            propsRef.current.onSkim?.(null, why);
+    };
+    const skimOn = !!props.skim;
+    const hostPlaying = !!props.playing;
+    useEffect(() => {
+        if (!skimOn)
+            endSkim("off");
+        else if (hostPlaying)
+            endSkim("playing");
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- endSkim 只读 ref
+    }, [skimOn, hostPlaying]);
+    useEffect(() => () => {
+        const s = skimLive.current;
+        if (s.raf !== null)
+            window.cancelAnimationFrame(s.raf);
+    }, []);
+    /* 拖动收尾:pointerup / pointercancel 之外,丢 capture、窗口失焦、Esc、「没按键的 move」都算松手 */
+    const winOff = useRef(null);
+    const endGesture = (pointerId) => {
+        const g = gesture.current;
+        const ids = pointerId === null ? [...g.pointers.keys()] : [pointerId];
+        if (!ids.some((id) => g.pointers.delete(id)))
+            return;
+        if (g.mode === "pinch")
+            propsRef.current.onZoom?.(live.current.pps, false);
+        const el = viewport.current;
+        for (const id of ids)
+            if (el?.hasPointerCapture?.(id))
+                el.releasePointerCapture(id);
+        if (g.pointers.size === 0) {
+            g.mode = "idle";
+            setScrubbing(false);
+            winOff.current?.();
+            winOff.current = null;
+        }
+        else if (g.mode === "pinch")
+            g.mode = "idle";
+    };
+    const endRef = useRef(endGesture);
+    useLayoutEffect(() => {
+        endRef.current = endGesture;
+    });
+    const armWindow = () => {
+        if (winOff.current)
+            return;
+        const up = (e) => endRef.current(e.pointerId);
+        const all = () => endRef.current(null);
+        const esc = (e) => {
+            if (e.key === "Escape")
+                all();
+        };
+        window.addEventListener("pointerup", up);
+        window.addEventListener("pointercancel", up);
+        window.addEventListener("blur", all);
+        window.addEventListener("keydown", esc);
+        winOff.current = () => {
+            window.removeEventListener("pointerup", up);
+            window.removeEventListener("pointercancel", up);
+            window.removeEventListener("blur", all);
+            window.removeEventListener("keydown", esc);
+        };
+    };
+    useEffect(() => () => winOff.current?.(), []);
     const onPointerDown = (e) => {
         if (e.button !== 0 && e.pointerType === "mouse")
             return;
@@ -162,8 +281,10 @@ export function Timeline(props) {
         const el = viewport.current;
         if (!el)
             return;
+        endSkim("press");
         g.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
         el.setPointerCapture?.(e.pointerId);
+        armWindow();
         const onRuler = e.target.closest("[data-xtl-ruler]") !== null;
         if (g.pointers.size === 2 && e.pointerType === "touch") {
             const [a, b] = [...g.pointers.values()];
@@ -186,8 +307,16 @@ export function Timeline(props) {
     };
     const onPointerMove = (e) => {
         const g = gesture.current;
-        if (!g.pointers.has(e.pointerId))
+        if (!g.pointers.has(e.pointerId)) {
+            if (canSkim(skimOn, hostPlaying, g.mode, e.pointerType) && g.pointers.size === 0 && (e.buttons & 1) === 0)
+                skimTo(tAtClient(e.clientX));
             return;
+        }
+        if (isStaleDrag(g.mode, e.pointerType, e.buttons)) {
+            // 早就松手了(pointerup 没到我们这儿):收尾,这一下 move 不算拖
+            endGesture(e.pointerId);
+            return;
+        }
         g.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (g.mode === "scrub")
             props.onSeek(tAtClient(e.clientX));
@@ -215,15 +344,7 @@ export function Timeline(props) {
             selectAt(e.target);
             props.onSeek(tAtClient(e.clientX));
         }
-        if (g.mode === "pinch")
-            props.onZoom?.(live.current.pps, false);
-        g.pointers.delete(e.pointerId);
-        if (g.pointers.size === 0) {
-            g.mode = "idle";
-            setScrubbing(false);
-        }
-        else if (g.mode === "pinch")
-            g.mode = "idle";
+        endGesture(e.pointerId);
     };
     /* ── 跟随播放头 ── */
     useLayoutEffect(() => {
@@ -245,10 +366,17 @@ export function Timeline(props) {
     useEffect(() => {
         const h = (e) => {
             const P = keymapRef.current;
-            if (!P.keymap || !P.onClipAction || e.metaKey || e.ctrlKey || e.altKey)
+            if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented)
                 return;
             const t = e.target;
             if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)))
+                return;
+            if (P.onSkimToggle && !e.shiftKey && !e.repeat && e.key.toLowerCase() === (P.skimKey ?? "s").toLowerCase()) {
+                e.preventDefault();
+                P.onSkimToggle(!P.skim, "key");
+                return;
+            }
+            if (!P.keymap || !P.onClipAction)
                 return;
             const action = P.keymap[e.key];
             if (!action)
@@ -284,7 +412,8 @@ export function Timeline(props) {
     /* ── 布局 ── */
     const contentW = total * pps;
     const narrow = viewW > 0 && viewW < 480;
-    const headW = narrow ? 64 : 112;
+    // 128:两个字的轨名 + 四个字的(「文字背景」)都放得下,不再截成「文字…」
+    const headW = narrow ? 64 : 128;
     const lanesH = tracks.reduce((n, t) => n + trackHeight(t), 0);
     const edge = playhead * pps - x < 34 ? "left" : playhead * pps - x > viewW - 34 ? "right" : null;
     const [tip, setTip] = useState(null);
@@ -300,7 +429,10 @@ export function Timeline(props) {
             tipTimer.current = window.setTimeout(() => setTip({ x: cx, y: cy, node: props.renderTooltip(clip, track) }), 220);
         }
         : undefined;
-    return (_jsxs("section", { "aria-label": L10N.timeline, className: cx("xtl", props.className), "data-theme": props.theme ?? "dark", ...props.attrs, children: [_jsxs("header", { className: "xtl-toolbar", children: [_jsx("div", { className: "xtl-toolbar-start", children: props.toolbarStart }), _jsxs("div", { className: "xtl-toolbar-end", children: [props.toolbarEnd, _jsx(ZoomControl, { pps: pps, minPps: minPps, maxPps: maxPps, viewW: viewW, onZoom: (p) => setZoom(p), onFit: fitAll, fitOn: fitMode, L: L10N })] })] }), _jsxs("div", { className: "xtl-body", children: [_jsxs("div", { className: "xtl-heads", style: { width: headW }, children: [_jsx("div", { className: "xtl-corner", style: { height: RULER_H + MARK_H }, children: props.corner ?? _jsx("span", { className: "xtl-mono xtl-faint", children: timecode(playhead, fps) }) }), tracks.map((t) => (_jsx(TrackHead, { track: t, narrow: narrow, L: L10N, onToggle: props.onToggleTrack ? () => props.onToggleTrack(t.id) : undefined }, t.id))), _jsx("div", { style: { height: SCROLLBAR_H } })] }), _jsxs("div", { ref: viewport, "data-xtl-viewport": "", className: cx("xtl-viewport", scrubbing && "xtl-scrubbing"), onPointerDown: onPointerDown, onPointerMove: onPointerMove, onPointerUp: onPointerEnd, onPointerCancel: onPointerEnd, onDoubleClick: props.onClipDoubleClick
+    return (_jsxs("section", { "aria-label": L10N.timeline, className: cx("xtl", props.className), "data-theme": props.theme ?? "dark", ...props.attrs, children: [_jsxs("header", { className: "xtl-toolbar", children: [_jsx("div", { className: "xtl-toolbar-start", children: props.toolbarStart }), _jsxs("div", { className: "xtl-toolbar-end", children: [props.toolbarEnd, props.onSkimToggle && (_jsxs("button", { type: "button", className: cx("xtl-btn xtl-btn-wide", skimOn && "xtl-btn-on"), "aria-pressed": skimOn, title: L10N.skimTitle, "data-xtl-skim-toggle": "", onClick: () => props.onSkimToggle(!skimOn, "button"), children: [_jsx(Svg, { size: 12, children: Icon.skim }), _jsx("span", { children: L10N.skim })] })), _jsx(ZoomControl, { pps: pps, minPps: minPps, maxPps: maxPps, viewW: viewW, onZoom: (p) => setZoom(p), onFit: fitAll, fitOn: fitMode, L: L10N })] })] }), _jsxs("div", { className: "xtl-body", children: [_jsxs("div", { className: "xtl-heads", style: { width: headW }, children: [_jsx("div", { className: "xtl-corner", style: { height: RULER_H + MARK_H }, children: skimT !== null ? (_jsxs("span", { className: "xtl-corner-skim xtl-mono", "data-xtl-skim-readout": "", children: [_jsx("span", { className: "xtl-corner-skim-tag", children: L10N.skimming }), timecode(skimT, fps)] })) : ((props.corner ?? _jsx("span", { className: "xtl-mono xtl-faint", children: timecode(playhead, fps) }))) }), tracks.map((t) => (_jsx(TrackHead, { track: t, narrow: narrow, L: L10N, onToggle: props.onToggleTrack ? () => props.onToggleTrack(t.id) : undefined }, t.id))), _jsx("div", { style: { height: SCROLLBAR_H } })] }), _jsxs("div", { ref: viewport, "data-xtl-viewport": "", "data-xtl-skim": skimOn ? "on" : "off", className: cx("xtl-viewport", scrubbing && "xtl-scrubbing", skimOn && "xtl-skim-on"), onPointerDown: onPointerDown, onPointerMove: onPointerMove, onPointerUp: onPointerEnd, onPointerCancel: onPointerEnd, onLostPointerCapture: (e) => endGesture(e.pointerId), onPointerLeave: (e) => {
+                            if (!gesture.current.pointers.has(e.pointerId))
+                                endSkim("leave");
+                        }, onDragStart: (e) => e.preventDefault(), onDoubleClick: props.onClipDoubleClick
                             ? (e) => {
                                 const el = e.target.closest("[data-xtl-clip]");
                                 const tr = el && tracks.find((t) => t.id === el.dataset.xtlTrack);
@@ -308,7 +440,7 @@ export function Timeline(props) {
                                 if (tr && c && !c.disabled)
                                     props.onClipDoubleClick(c, tr);
                             }
-                            : undefined, children: [_jsxs("div", { className: "xtl-content", style: { width: Math.max(contentW, viewW), transform: `translate3d(${-x}px,0,0)` }, children: [_jsx(Ruler, { t0: Math.max(0, x / pps), t1: (x + viewW) / pps, pps: pps, fps: fps, total: total }), _jsx(MarkerRow, { markers: props.markers ?? [], pps: pps, t0: t0, t1: t1, viewX: x, onMarkerClick: props.onMarkerClick, L: L10N }), _jsx("div", { role: "slider", tabIndex: -1, "aria-label": L10N.timeline, "aria-valuemin": 0, "aria-valuemax": Math.round(total * 100) / 100, "aria-valuenow": Math.round(playhead * 100) / 100, "aria-valuetext": timecode(playhead, fps), "data-xtl-lanes": "", className: "xtl-lanes", style: { height: lanesH }, children: _jsx(Lanes, { tracks: tracks, pps: pps, t0: t0, t1: t1, viewX: x, viewW: viewW, playhead: playhead, selection: selection, onHover: onClipHover }) }), _jsx("div", { "data-xtl-playhead": "", className: "xtl-playhead", style: { transform: `translate3d(${playhead * pps}px,0,0)` }, children: _jsx("span", { className: "xtl-playhead-tc xtl-mono", style: edge ? { transform: edge === "left" ? "translateX(-2px)" : "translateX(calc(-100% + 2px))" } : undefined, children: timecode(playhead, fps) }) })] }), !total && _jsx("p", { className: "xtl-empty", children: L10N.empty })] })] }), _jsx(Scrollbar, { x: x, viewW: viewW, contentW: contentW, headW: headW, tracks: tracks, total: total, onScroll: setScroll }), tip && (_jsx("div", { className: "xtl-tip", style: { left: tip.x, top: tip.y }, role: "tooltip", children: tip.node }))] }));
+                            : undefined, children: [_jsxs("div", { className: "xtl-content", style: { width: Math.max(contentW, viewW), transform: `translate3d(${-x}px,0,0)` }, children: [_jsx(Ruler, { t0: Math.max(0, x / pps), t1: (x + viewW) / pps, pps: pps, fps: fps, total: total }), _jsx(MarkerRow, { markers: props.markers ?? [], pps: pps, t0: t0, t1: t1, viewX: x, onMarkerClick: props.onMarkerClick, L: L10N }), _jsx("div", { role: "slider", tabIndex: -1, "aria-label": L10N.timeline, "aria-valuemin": 0, "aria-valuemax": Math.round(total * 100) / 100, "aria-valuenow": Math.round(playhead * 100) / 100, "aria-valuetext": timecode(playhead, fps), "data-xtl-lanes": "", className: "xtl-lanes", style: { height: lanesH }, children: _jsx(Lanes, { tracks: tracks, pps: pps, t0: t0, t1: t1, viewX: x, viewW: viewW, playhead: playhead, selection: selection, onHover: onClipHover }) }), skimT !== null && (_jsx("div", { "data-xtl-skimmer": "", className: "xtl-skimmer", style: { transform: `translate3d(${skimT * pps}px,0,0)` }, children: _jsx("span", { className: "xtl-skimmer-tc xtl-mono", children: timecode(skimT, fps) }) })), _jsx("div", { "data-xtl-playhead": "", className: "xtl-playhead", style: { transform: `translate3d(${playhead * pps}px,0,0)` }, children: _jsx("span", { className: "xtl-playhead-tc xtl-mono", style: edge ? { transform: edge === "left" ? "translateX(-2px)" : "translateX(calc(-100% + 2px))" } : undefined, children: timecode(playhead, fps) }) })] }), !total && _jsx("p", { className: "xtl-empty", children: L10N.empty })] })] }), _jsx(Scrollbar, { x: x, viewW: viewW, contentW: contentW, headW: headW, tracks: tracks, total: total, onScroll: setScroll }), tip && (_jsx("div", { className: "xtl-tip", style: { left: tip.x, top: tip.y }, role: "tooltip", children: tip.node }))] }));
 }
 function cx(...a) {
     return a.filter(Boolean).join(" ");
@@ -322,6 +454,7 @@ const Icon = {
     eyeOff: _jsx("path", { d: "M3 3l18 18M10.6 5.1A10.4 10.4 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.6C3.9 8.4 2 12 2 12s3.5 7 10 7a9.7 9.7 0 0 0 5.4-1.6M9.9 9.9a3 3 0 0 0 4.2 4.2" }),
     vol: _jsx("path", { d: "M11 5 6 9H2v6h4l5 4V5zM15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14" }),
     volOff: _jsx("path", { d: "M11 5 6 9H2v6h4l5 4V5zM22 9l-6 6M16 9l6 6" }),
+    skim: _jsx("path", { d: "M12 3v18M5 8l-3 4 3 4M19 8l3 4-3 4" }),
 };
 function Svg({ children, size = 14 }) {
     return (_jsx("svg", { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true, children: children }));
@@ -342,7 +475,7 @@ function TrackHead({ track, narrow, L, onToggle }) {
     const mode = trackToggle(track);
     const off = trackOff(track);
     const verb = mode === "mute" ? (off ? L.unmute : L.mute) : off ? L.show : L.hide;
-    return (_jsxs("div", { className: cx("xtl-head", narrow && "xtl-head-narrow", off && "xtl-head-off"), style: { height: trackHeight(track) }, "data-xtl-head": track.id, children: [_jsx("span", { className: cx("xtl-chip xtl-mono", `xtl-kind-${track.kind}`), children: track.id }), !narrow && _jsx("span", { className: "xtl-head-name", children: track.name }), mode !== "none" && onToggle && (_jsx("button", { type: "button", "aria-pressed": off, "aria-label": `${track.id} ${track.name} ${verb}`, title: `${verb} ${track.id} ${track.name}${track.toggleHint ? `(${track.toggleHint})` : ""}`, "data-xtl-toggle": track.id, onClick: onToggle, className: "xtl-iconbtn", children: _jsx(Svg, { children: mode === "mute" ? (off ? Icon.volOff : Icon.vol) : off ? Icon.eyeOff : Icon.eye }) }))] }));
+    return (_jsxs("div", { className: cx("xtl-head", narrow && "xtl-head-narrow", off && "xtl-head-off"), style: { height: trackHeight(track) }, "data-xtl-head": track.id, children: [_jsx("span", { className: cx("xtl-chip xtl-mono", `xtl-kind-${track.kind}`), children: track.id }), !narrow && (_jsx("span", { className: "xtl-head-name", title: track.name, children: track.name })), mode !== "none" && onToggle && (_jsx("button", { type: "button", "aria-pressed": off, "aria-label": `${track.id} ${track.name} ${verb}`, title: `${verb} ${track.id} ${track.name}${track.toggleHint ? `(${track.toggleHint})` : ""}`, "data-xtl-toggle": track.id, onClick: onToggle, className: "xtl-iconbtn", children: _jsx(Svg, { children: mode === "mute" ? (off ? Icon.volOff : Icon.vol) : off ? Icon.eyeOff : Icon.eye }) }))] }));
 }
 /* ══════════════════════════ 刻度 */
 const Ruler = memo(function Ruler({ t0, t1, pps, fps, total }) {

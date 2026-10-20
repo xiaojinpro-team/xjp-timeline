@@ -241,3 +241,20 @@ export function clipAt(track: Track | undefined, t: number): Clip | undefined {
   if (!track) return undefined;
   return track.clips.find((c) => t >= c.start && t < c.end) ?? (track.clips.length && t >= track.clips[track.clips.length - 1].end - 1e-6 ? track.clips[track.clips.length - 1] : undefined);
 }
+
+/* ══════════════════════════ 指针:拖动收尾 / 划过预览 */
+
+export type GestureMode = "idle" | "scrub" | "maybe-pan" | "pan" | "pinch";
+
+/**
+ * 拖动中收到一个 pointermove,却已经没有按键按着(鼠标在控件外松开、浏览器把 pointerup 吞了 / 丢了 capture):
+ * 这次拖动其实早结束了,必须当场收尾,不然鼠标回来「不按也跟着走」。
+ */
+export function isStaleDrag(mode: GestureMode, pointerType: string, buttons: number): boolean {
+  return mode === "scrub" && pointerType === "mouse" && (buttons & 1) === 0;
+}
+
+/** 划过预览只在:开着、没在播、没有拖动 / 手势、鼠标(或笔)悬停时生效;触屏没有悬停。 */
+export function canSkim(on: boolean, playing: boolean, mode: GestureMode, pointerType: string): boolean {
+  return on && !playing && mode === "idle" && pointerType !== "touch";
+}

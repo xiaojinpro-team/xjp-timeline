@@ -34,6 +34,7 @@
   --xtl-clip-text: rgb(255 255 255 / 0.92);
   --xtl-select: #ffffff;
   --xtl-playhead: #ff453a;
+  --xtl-skimmer: #ffd60a;
   --xtl-tick: rgb(255 255 255 / 0.22);
   --xtl-tick-major: rgb(255 255 255 / 0.45);
   --xtl-accent: #e0a526;
@@ -86,6 +87,7 @@
   --xtl-clip-text: #1d1d1f;
   --xtl-select: #111113;
   --xtl-playhead: #e3261d;
+  --xtl-skimmer: #b07d00;
   --xtl-tick: rgb(0 0 0 / 0.2);
   --xtl-tick-major: rgb(0 0 0 / 0.42);
   --xtl-cut-hard: rgb(0 0 0 / 0.65);
@@ -261,6 +263,18 @@
   padding: 1px 5px; border-radius: 4px; font-size: 10px; line-height: 14px; white-space: nowrap;
   color: #fff; background: var(--xtl-playhead); box-shadow: 0 1px 2px rgb(0 0 0 / 0.35);
 }
+
+/* 划过预览:黄色细线 + 描边时码(和红色实心的播放头一眼分开) */
+.xtl-skim-on { cursor: crosshair; }
+.xtl-skimmer { position: absolute; top: 0; bottom: 0; width: 0; z-index: 6; pointer-events: none; will-change: transform; }
+.xtl-skimmer::after { content: ""; position: absolute; top: 0; bottom: 0; left: -0.5px; width: 1px; background: var(--xtl-skimmer); }
+.xtl-skimmer-tc {
+  position: absolute; top: 3px; left: 0; transform: translateX(-50%);
+  padding: 0 4px; border-radius: 4px; font-size: 10px; line-height: 14px; white-space: nowrap;
+  color: var(--xtl-skimmer); background: var(--xtl-bg); border: 1px solid var(--xtl-skimmer);
+}
+.xtl-corner-skim { display: inline-flex; align-items: center; gap: 4px; color: var(--xtl-skimmer); font-weight: 600; }
+.xtl-corner-skim-tag { padding: 0 3px; border: 1px solid currentColor; border-radius: 3px; font-size: 9px; line-height: 12px; font-family: inherit; }
 
 /* 滚动条 / 小地图 */
 .xtl-scroll { display: flex; background: var(--xtl-head); border-top: 1px solid var(--xtl-line); }
